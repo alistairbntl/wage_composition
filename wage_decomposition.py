@@ -145,12 +145,14 @@ def _endpoint_merge(component_panel, weights, base_date, end_date):
     ].copy()
     base_weights = weights[weights["date"] == pd.Timestamp(base_date)].copy()
     end_weights = weights[weights["date"] == pd.Timestamp(end_date)].copy()
+    if "industry_name" not in base_weights.columns:
+        base_weights["industry_name"] = pd.NA
 
     base_panel = base_panel[["industry_code", "ahe"]].rename(
         columns={"ahe": "base_ahe"}
     )
     end_panel = end_panel[["industry_code", "ahe"]].rename(columns={"ahe": "end_ahe"})
-    base_weights = base_weights[["industry_code", "weight"]].rename(
+    base_weights = base_weights[["industry_code", "industry_name", "weight"]].rename(
         columns={"weight": "base_weight"}
     )
     end_weights = end_weights[["industry_code", "weight"]].rename(
@@ -214,6 +216,7 @@ def decompose_interval(component_panel, weights, benchmark, base_date, end_date)
     contributions = merged[
         [
             "industry_code",
+            "industry_name",
             "base_ahe",
             "end_ahe",
             "base_weight",
@@ -230,6 +233,7 @@ def decompose_interval(component_panel, weights, benchmark, base_date, end_date)
                 "base_date",
                 "date",
                 "industry_code",
+                "industry_name",
                 "base_ahe",
                 "end_ahe",
                 "base_weight",
@@ -320,7 +324,9 @@ def _validate_sequence_inputs(component_panel, weights, benchmark, lag):
     if component_dates != weight_dates:
         raise ValueError("component_panel and weights have mismatched date coverage")
     if component_dates != benchmark_dates:
-        raise ValueError("benchmark date coverage does not match the selected component window")
+        raise ValueError(
+            "benchmark date coverage does not match the selected component window"
+        )
 
     all_dates = sorted(component_dates | weight_dates | benchmark_dates)
     expected_monthly_dates = pd.date_range(
@@ -329,8 +335,7 @@ def _validate_sequence_inputs(component_panel, weights, benchmark, lag):
     missing_months = sorted(set(expected_monthly_dates) - set(all_dates))
     if missing_months:
         raise ValueError(
-            "missing monthly dates in the decomposition sequence: "
-            f"{missing_months}"
+            f"missing monthly dates in the decomposition sequence: {missing_months}"
         )
 
     component_industries_by_date = {
@@ -386,9 +391,7 @@ def _validate_sequence_inputs(component_panel, weights, benchmark, lag):
             f"{sorted(pd.to_datetime(invalid_dates))}"
         )
 
-    benchmark_ahe = pd.to_numeric(
-        bench["published_total_private_ahe"], errors="coerce"
-    )
+    benchmark_ahe = pd.to_numeric(bench["published_total_private_ahe"], errors="coerce")
     if benchmark_ahe.isna().any() or not np.isfinite(benchmark_ahe.to_numpy()).all():
         raise ValueError(
             "benchmark contains missing, nonnumeric, or nonfinite published_total_private_ahe values"
@@ -436,7 +439,9 @@ def build_decomposition_series(component_panel, weights, benchmark, lag=1):
     if component_dates != weight_dates:
         raise ValueError("component_panel and weights have mismatched date coverage")
     if set(component_dates) != set(benchmark_dates):
-        raise ValueError("benchmark date coverage does not match the selected component window")
+        raise ValueError(
+            "benchmark date coverage does not match the selected component window"
+        )
 
     for date in component_dates:
         date_component = component[component["date"] == date]
@@ -459,15 +464,15 @@ def build_decomposition_series(component_panel, weights, benchmark, lag=1):
     if not np.allclose(weight_df.groupby("date")["weight"].sum().to_numpy(), 1.0):
         raise ValueError("weights must sum to one for each date")
 
-    benchmark_ahe = pd.to_numeric(
-        bench["published_total_private_ahe"], errors="coerce"
-    )
+    benchmark_ahe = pd.to_numeric(bench["published_total_private_ahe"], errors="coerce")
     if benchmark_ahe.isna().any() or not np.isfinite(benchmark_ahe.to_numpy()).all():
         raise ValueError(
             "benchmark contains missing, nonnumeric, or nonfinite published_total_private_ahe values"
         )
 
-    end_dates = pd.DatetimeIndex(sorted(set(component_dates) | set(weight_dates) | set(benchmark_dates)))
+    end_dates = pd.DatetimeIndex(
+        sorted(set(component_dates) | set(weight_dates) | set(benchmark_dates))
+    )
     if len(end_dates) == 0:
         raise ValueError("no dates available for decomposition")
 
@@ -475,8 +480,7 @@ def build_decomposition_series(component_panel, weights, benchmark, lag=1):
     if not set(expected_dates) == set(end_dates):
         missing = sorted(set(expected_dates) - set(end_dates))
         raise ValueError(
-            "missing monthly dates in the decomposition sequence: "
-            f"{missing}"
+            f"missing monthly dates in the decomposition sequence: {missing}"
         )
 
     interval_contributions = []
@@ -493,12 +497,8 @@ def build_decomposition_series(component_panel, weights, benchmark, lag=1):
         subset_component = component[
             component["date"].isin([base_date, end_date])
         ].copy()
-        subset_weights = weight_df[
-            weight_df["date"].isin([base_date, end_date])
-        ].copy()
-        subset_benchmark = bench[
-            bench["date"].isin([base_date, end_date])
-        ].copy()
+        subset_weights = weight_df[weight_df["date"].isin([base_date, end_date])].copy()
+        subset_benchmark = bench[bench["date"].isin([base_date, end_date])].copy()
 
         if set(subset_component["date"].unique()) != {base_date, end_date}:
             raise ValueError(
@@ -533,7 +533,9 @@ def build_decomposition_series(component_panel, weights, benchmark, lag=1):
         interval_summaries.append(period_summary)
 
     if not interval_contributions:
-        raise ValueError("no valid decomposition intervals were available for the selected lag")
+        raise ValueError(
+            "no valid decomposition intervals were available for the selected lag"
+        )
 
     contributions = pd.concat(interval_contributions, ignore_index=True)
     summary = pd.concat(interval_summaries, ignore_index=True)
@@ -551,9 +553,7 @@ def rank_decomposition_contributions(contributions, date, effect="composition"):
     _require_columns(contributions, ["date", "industry_code"], "contributions")
 
     if effect not in {"within", "composition"}:
-        raise ValueError(
-            f"effect must be 'within' or 'composition'; got {effect!r}"
-        )
+        raise ValueError(f"effect must be 'within' or 'composition'; got {effect!r}")
 
     effect_column = f"{effect}_contribution"
     if effect_column not in contributions.columns:
@@ -562,15 +562,21 @@ def rank_decomposition_contributions(contributions, date, effect="composition"):
     target_date = pd.Timestamp(date)
     selected = contributions[contributions["date"] == target_date].copy()
     if selected.empty:
-        raise ValueError(f"date {target_date} is not present in the contributions table")
+        raise ValueError(
+            f"date {target_date} is not present in the contributions table"
+        )
 
     selected = selected.copy()
     selected["abs_effect"] = selected[effect_column].abs()
-    selected = selected.sort_values(
-        ["abs_effect", "industry_code"],
-        ascending=[False, True],
-        kind="mergesort",
-    ).drop(columns=["abs_effect"]).reset_index(drop=True)
+    selected = (
+        selected.sort_values(
+            ["abs_effect", "industry_code"],
+            ascending=[False, True],
+            kind="mergesort",
+        )
+        .drop(columns=["abs_effect"])
+        .reset_index(drop=True)
+    )
     return selected
 
 
@@ -595,7 +601,9 @@ def build_fixed_composition_series(
     )
 
     if component.duplicated(subset=["date", "industry_code"]).any():
-        raise ValueError("component_panel contains duplicate (date, industry_code) rows")
+        raise ValueError(
+            "component_panel contains duplicate (date, industry_code) rows"
+        )
     if weight_df.duplicated(subset=["date", "industry_code"]).any():
         raise ValueError("weights contains duplicate (date, industry_code) rows")
     if benchmark_df.duplicated(subset=["date"]).any():
@@ -616,7 +624,10 @@ def build_fixed_composition_series(
     pub_ahe_numeric = pd.to_numeric(
         benchmark_df["published_total_private_ahe"], errors="coerce"
     )
-    if pub_ahe_numeric.isna().any() or not np.isfinite(pub_ahe_numeric.to_numpy()).all():
+    if (
+        pub_ahe_numeric.isna().any()
+        or not np.isfinite(pub_ahe_numeric.to_numpy()).all()
+    ):
         raise ValueError(
             "benchmark contains missing, nonnumeric, or nonfinite published_total_private_ahe values"
         )
@@ -627,11 +638,15 @@ def build_fixed_composition_series(
     if component_dates != weight_dates:
         raise ValueError("component_panel and weights have mismatched date coverage")
     if sorted(set(component_dates) - set(benchmark_dates)):
-        raise ValueError("benchmark is missing required dates for the selected component window")
+        raise ValueError(
+            "benchmark is missing required dates for the selected component window"
+        )
 
     ref_ts = pd.Timestamp(reference_date)
     if pd.isna(ref_ts) or ref_ts not in set(component_dates):
-        raise ValueError("reference_date is outside the available component and weight window")
+        raise ValueError(
+            "reference_date is outside the available component and weight window"
+        )
 
     for date in component_dates:
         date_component = component[component["date"] == date]
@@ -641,7 +656,9 @@ def build_fixed_composition_series(
                 f"component_panel and weights have mismatched industry coverage for date {date}"
             )
     date_weight_sums = weight_df.groupby("date")["weight"].sum()
-    invalid_weight_dates = date_weight_sums[~np.isclose(date_weight_sums, 1.0)].index.tolist()
+    invalid_weight_dates = date_weight_sums[
+        ~np.isclose(date_weight_sums, 1.0)
+    ].index.tolist()
     if invalid_weight_dates:
         raise ValueError(
             "weights must sum to one for each date; invalid dates: "
@@ -655,7 +672,9 @@ def build_fixed_composition_series(
         raise ValueError(f"reference_date weight rows are duplicated for {ref_ts}")
 
     reference_component = component[component["date"] == ref_ts].copy()
-    if set(reference_component["industry_code"]) != set(reference_weights["industry_code"]):
+    if set(reference_component["industry_code"]) != set(
+        reference_weights["industry_code"]
+    ):
         raise ValueError(
             f"reference-date component and weight industry sets are misaligned for {ref_ts}"
         )
@@ -664,7 +683,9 @@ def build_fixed_composition_series(
     if not np.isclose(reference_weight_map.sum(), 1.0):
         raise ValueError(f"reference-date weights must sum to one for {ref_ts}")
 
-    reference_component_by_industry = reference_component.set_index("industry_code")["ahe"]
+    reference_component_by_industry = reference_component.set_index("industry_code")[
+        "ahe"
+    ]
     fixed_reference_ahe = float(
         (
             reference_component_by_industry
@@ -678,8 +699,12 @@ def build_fixed_composition_series(
 
     rows = []
     for date in component_dates:
-        date_component = component[component["date"] == date].set_index("industry_code")["ahe"]
-        date_weights = weight_df[weight_df["date"] == date].set_index("industry_code")["weight"]
+        date_component = component[component["date"] == date].set_index(
+            "industry_code"
+        )["ahe"]
+        date_weights = weight_df[weight_df["date"] == date].set_index("industry_code")[
+            "weight"
+        ]
         if set(date_component.index) != set(date_weights.index):
             raise ValueError(
                 f"component_panel and weights have mismatched industry coverage for date {date}"

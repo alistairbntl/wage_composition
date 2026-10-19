@@ -713,6 +713,82 @@ def build_analysis_panel(observations, series_spec, start_date, end_date):
     return panel
 
 
+def benchmark_for_reconciliation(observations, start_date, end_date):
+    benchmark_spec = [
+        record for record in SERIES_SPEC if record.get("role") == "benchmark"
+    ]
+
+    benchmark_lookup = {record["series_id"]: record for record in benchmark_spec}
+
+    benchmark = observations.loc[
+        observations["series_id"].isin(benchmark_lookup)
+        & observations["date"].between(start_date, end_date)
+    ].copy()
+
+    benchmark["metric"] = benchmark["series_id"].map(
+        lambda sid: benchmark_lookup[sid]["metric"]
+    )
+    benchmark["industry_code"] = benchmark["series_id"].map(
+        lambda sid: benchmark_lookup[sid]["industry_code"]
+    )
+    benchmark["industry_name"] = benchmark["series_id"].map(
+        lambda sid: benchmark_lookup[sid]["industry_name"]
+    )
+    benchmark["role"] = "benchmark"
+
+    benchmark = benchmark.sort_values(["date", "metric"]).reset_index(drop=True)
+
+    benchmark_for_reconciliation = (
+        benchmark.loc[
+            benchmark["metric"].isin(["average_hourly_earnings", "employment"]),
+            ["date", "metric", "value"],
+        ]
+        .assign(
+            output_column=lambda df: df["metric"].map(
+                {
+                    "average_hourly_earnings": "published_total_private_ahe",
+                    "employment": "published_total_private_employment",
+                }
+            )
+        )
+        .pivot(
+            index="date",
+            columns="output_column",
+            values="value",
+        )
+        .reset_index()
+    )
+
+    benchmark_for_reconciliation.columns.name = None
+    benchmark_for_reconciliation["date"] = pd.to_datetime(
+        benchmark_for_reconciliation["date"]
+    ).dt.normalize()
+
+    required = {
+        "date",
+        "published_total_private_ahe",
+        "published_total_private_employment",
+    }
+
+    missing = required - set(benchmark_for_reconciliation.columns)
+    if missing:
+        raise ValueError(f"Benchmark is missing columns: {sorted(missing)}")
+
+    value_columns = [
+        "published_total_private_ahe",
+        "published_total_private_employment",
+    ]
+
+    if benchmark_for_reconciliation[value_columns].isna().any().any():
+        raise ValueError("Benchmark contains missing required values")
+
+    benchmark_for_reconciliation = benchmark_for_reconciliation.sort_values(
+        "date"
+    ).reset_index(drop=True)
+
+    return benchmark_for_reconciliation
+
+
 def calculate_paid_hours_weights(component_panel):
     """Calculate monthly paid-hours exposure and component weights."""
     if component_panel is None:
